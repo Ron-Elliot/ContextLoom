@@ -2,7 +2,11 @@
 
 ## Status
 
-Proposed
+Accepted
+
+## Design Spec
+
+The open questions listed at the bottom of this ADR have been resolved. Concrete decisions on all eight questions, plus the storage substrate, MCP tool/resource split, and project scoping semantics, are documented in [docs/design/v1-design-spec.md](../design/v1-design-spec.md).
 
 ## Context
 
