@@ -62,19 +62,20 @@ Every artifact ingested into the raw evidence layer is wrapped in a standard env
 
 ```json
 {
-  "envelope_version": "1",
-  "artifact_id":       "<uuid-v4>",
-  "project_id":        "<project_id>",
-  "source_type":       "<source_type>",
-  "source_uri":        "<canonical_source_identifier>",
-  "content_hash":      "<sha256_hex>",
-  "content":           "<raw_text_content | null>",
-  "content_ref":       "<object_store_path | null>",
-  "ingested_at":       "<iso8601_utc>",
-  "source_modified_at":"<iso8601_utc | null>",
-  "extractor":         "<extractor_name>@<version>",
-  "provenance":        { ... },
-  "tags":              ["<tag>"]
+  "envelope_version":    "1",
+  "artifact_id":         "<uuid-v5-stable>",
+  "artifact_version_id": "<uuid-v4>",
+  "project_id":          "<project_id>",
+  "source_type":         "<source_type>",
+  "source_uri":          "<logical_artifact_identifier>",
+  "content_hash":        "<sha256_hex>",
+  "content":             "<raw_text_content | null>",
+  "content_ref":         "<object_store_path | null>",
+  "ingested_at":         "<iso8601_utc>",
+  "source_modified_at":  "<iso8601_utc | null>",
+  "extractor":           "<extractor_name>@<version>",
+  "provenance":          { ... },
+  "tags":                ["<tag>"]
 }
 ```
 
@@ -88,6 +89,7 @@ The `provenance` object is source-type-specific. Each source type defines its ow
   "repo_url":   "https://github.com/org/repo",
   "commit_sha": "<40-char sha>",
   "file_path":  "docs/adrs/0001-context-system-for-ai-workers.md",
+  "branch":     "main",
   "start_line": 1,
   "end_line":   347
 }
@@ -105,8 +107,16 @@ The `provenance` object is source-type-specific. Each source type defines its ow
 
 ### Field rules
 
-- `artifact_id` is stable across re-ingests of the same logical artifact from the same source. Implementors derive it deterministically from `(project_id, source_type, source_uri)` using a UUID v5 namespace.
-- `content_hash` changes when the content changes. A changed hash triggers downstream staleness propagation.
+These two fields solve different identity problems:
+
+- `artifact_id` — stable logical identity for a given artifact across all ingests. Derived deterministically as a UUID v5 from `(project_id, source_type, source_uri)`. This is the key for deduplication, reconciliation, and derivation links. It must be stable as long as the logical artifact exists at that URI.
+- `artifact_version_id` — unique identity for a specific ingest row. A new UUID v4 on every ingest. This is the key for append-only history and version-specific provenance lookup.
+
+`source_uri` must identify the **logical artifact**, not a version. For git files, `source_uri` is the repository-relative file path (e.g., `docs/adrs/0001-context-system-for-ai-workers.md`), not a URI that includes a commit SHA. The commit SHA belongs in `provenance.commit_sha`. If `source_uri` included the commit SHA, each commit would generate a new logical artifact rather than a new version of the same artifact — breaking deduplication and staleness propagation.
+
+Other field rules:
+
+- `content_hash` identifies the actual content state. A changed hash on re-ingest triggers downstream staleness propagation.
 - `content` holds inline text for small artifacts. `content_ref` holds a path for large binary artifacts. Exactly one is non-null.
 - `extractor` records which extractor version produced this envelope, enabling re-ingestion when extractor logic changes.
 
@@ -141,17 +151,20 @@ Every entity carries:
 - `name`
 - `description`
 - `review_status`: `candidate | reviewed | rejected`
-- `freshness`: `current | stale`
-- `attention_state`: `null | needs_attention | conflicted`
+- `last_verified_at`: timestamp or null — when a reviewer last confirmed this entity was correct
+- `last_evidence_change_at`: timestamp or null — when the underlying evidence last changed
+- `attention_state`: `null | conflicted` — set to `conflicted` when contradictory claims exist; cleared by reviewer resolution
 - `created_at`, `updated_at`
 - `embedding` (pgvector, 1536-dim for `text-embedding-3-small`)
+
+Staleness is derived, not stored: an entity is considered stale when `last_evidence_change_at IS NOT NULL AND (last_verified_at IS NULL OR last_evidence_change_at > last_verified_at)`. This lets the system query for items older than a review threshold (e.g., verified more than 7 days before the most recent evidence change) without requiring a stored enum to stay synchronized.
 
 #### Claims
 
 Consequential facts about an entity are stored as separate `claim` rows rather than inline entity fields. This enables claim-level citation and review.
 
 ```
-entity_id + claim_type + claim_value + source_artifact_ids + review_status + freshness
+entity_id + claim_type + claim_value + source_artifact_ids + review_status + last_verified_at + last_evidence_change_at
 ```
 
 Example claim types: `has_responsibility`, `has_constraint`, `implements_interface`, `superseded_by`, `depends_on`.
@@ -169,31 +182,49 @@ Example claim types: `has_responsibility`, `has_constraint`, `implements_interfa
 | `RELATED_TO` | any | any | General association, weakly typed |
 | `POSSIBLE_DUPLICATE_OF` | any | any | Candidate merge, not yet resolved |
 
-Relationships carry: `relationship_id`, `source_entity_id`, `target_entity_id`, `type`, `review_status`, `freshness`, `citation_artifact_ids`.
+Relationships carry: `relationship_id`, `source_entity_id`, `target_entity_id`, `type`, `review_status`, `last_verified_at`, `last_evidence_change_at`, `citation_artifact_ids`.
 
 ---
 
 ## 4. First Source-Specific Extractors for v1
 
-**v1 extractor: `markdown-doc` extractor**
+**v1 extractor: `repo-file` extractor**
 
-The first extractor reads Markdown files from a configured git repository. This was chosen because:
+The first extractor ingests all in-scope files from a configured git repository and builds a repo-wide file-intelligence baseline. A markdown-only extractor was considered but rejected: it treats non-Markdown files as opaque raw artifacts, which produces a documentation-intelligence system rather than a project-state-intelligence system. V1 must validate repo-wide artifact coverage, per-file summaries, and file-to-file relationships — not just ADR extraction.
 
-- Every software project has Markdown documentation (READMEs, ADRs, specs).
+The extractor is chosen because:
+
 - It requires no external API credentials.
-- It covers the highest-value low-hanging fruit: architectural decisions recorded as ADRs.
-- It enables a fully self-contained bootstrap test against ContextLoom's own repo.
+- It can bootstrap against any git repository, including ContextLoom's own repo.
+- It validates the full pipeline across all file types the system will eventually need to understand.
 
-#### What the `markdown-doc` extractor does
+#### What the `repo-file` extractor does
 
-1. Walks the configured file glob patterns in a git repo (default: `**/*.md`, `**/*.mdx`).
-2. For each file, emits a raw artifact envelope with the file content and git provenance.
-3. Produces entity extraction candidates via an LLM pass that identifies: decisions (from ADR frontmatter or heading patterns), components (named subsystems), constraints, and interfaces mentioned in the text.
-4. Records derivation links from each artifact to each extracted entity/claim.
+Every in-scope file gets:
+
+1. A raw artifact envelope with the file content and git provenance (see Section 2).
+2. A short LLM-generated summary (1-3 sentences) stored as a `summary` claim on the artifact record, with a citation back to the specific `artifact_version_id`.
+3. Explicit relationships where discoverable (imports, dependencies, references).
+
+Extraction depth varies by file type:
+
+| File type | Extraction |
+|---|---|
+| `.md`, `.mdx` | Full entity extraction: decisions (ADR frontmatter or heading patterns), components, constraints, interfaces; derivation links from artifact to each entity/claim |
+| Code files (`.ts`, `.tsx`, `.js`, `.py`, `.go`, `.rb`, etc.) | Summary + import/dependency extraction: file-level `DEPENDS_ON` relationships to other in-scope files; list of exported symbols as claims |
+| Config files (`.yaml`, `.json`, `.toml`, `.env`, etc.) | Summary + key-value extraction: notable config keys and values as claims |
+| Test files (`*.test.*`, `*.spec.*`, `*_test.*`) | Summary + behavioral assertion descriptions: what the test covers as a claim |
+| All other in-scope files | Summary only |
+
+This gives the system:
+- Repo-wide artifact coverage with no second-class files
+- Per-file summaries queryable through the summary layer
+- File-to-file dependency relationships derived from imports and references
+- A path from file intelligence to higher-order entities (a component may map to a directory or package; decisions map from ADRs)
 
 #### v1 extractor scope
 
-The markdown-doc extractor is the only extractor shipping in v1. A second extractor (Linear issues or GitHub issues) is the first post-v1 addition, but is out of scope until v1 is end-to-end working.
+The `repo-file` extractor is the only extractor shipping in v1. A second extractor (Linear issues or GitHub issues) is the first post-v1 addition, out of scope until the repo-file pipeline is end-to-end working.
 
 ---
 
@@ -233,7 +264,7 @@ Input:
   relationship_types:  string[] (default: all)
   direction:           "outbound" | "inbound" | "both" (default: "both")
   depth:               integer  (default: 1, max: 3)
-  trust_filter:        TrustFilter (default: reviewed + current)
+  trust_filter:        TrustFilter (default: reviewed, max_staleness_days: 7)
 
 Output:
   root:     Entity
@@ -250,26 +281,24 @@ Input:
   query:        string   (required)
   entity_types: string[] (default: all)
   project_id:   string   (optional, scoped to project if set)
-  trust_filter: TrustFilter (default: reviewed + current)
+  trust_filter: TrustFilter (default: reviewed, max_staleness_days: 7)
   limit:        integer  (default: 10, max: 50)
 
 Output:
   results: SearchResult[]  (entity + score + matched_claims + citations)
 ```
 
-#### `search_artifacts`
+#### `get_artifact`
 
-Lexical search over the raw evidence layer.
+Fetch a specific raw artifact by ID. Used for targeted evidence access when a worker needs to read the source text behind a cited claim or entity. Discovery happens in the summary layer; raw artifacts are fetched by citation rather than searched as a main interface.
 
 ```
 Input:
-  query:        string   (required)
-  source_types: string[] (default: all)
-  project_id:   string   (optional)
-  limit:        integer  (default: 10, max: 50)
+  artifact_id:         string  (required)
+  artifact_version_id: string  (optional — fetches latest version if omitted)
 
 Output:
-  results: ArtifactResult[]  (artifact_id + source_uri + snippet + provenance)
+  artifact: ArtifactEnvelope  (envelope + content or content_ref + provenance)
 ```
 
 #### `get_project_overview`
@@ -285,7 +314,7 @@ Output:
   components:   Entity[]
   decisions:    Entity[]
   constraints:  Entity[]
-  freshness_summary: FreshnessSummary
+  staleness_summary: StalenessSummary  (counts of stale / current / unverified items)
 ```
 
 ### MCP Resources (v1)
@@ -302,20 +331,20 @@ Resources are addressable by URI. They return the current state of the identifie
 | `context://entities/{entity_id}/claims` | Claims for an entity |
 | `context://entities/{entity_id}/relationships` | Direct relationships for an entity |
 
-Resource URIs use `project_id` values from the project config (see Section 8). `entity_id` values are UUIDs from the summary layer.
+Resource URIs use `project_id` values from the project config (see Section 10). `entity_id` values are UUIDs from the summary layer.
 
 ### TrustFilter type
 
-Used by tools to filter on review/freshness state.
+Used by tools to filter on review and staleness state. Staleness is derived from timestamps (see Section 8), not a stored enum.
 
 ```
 TrustFilter:
-  review_status:   ("candidate" | "reviewed")[]  (default: ["reviewed"])
-  freshness:       ("current" | "stale")[]        (default: ["current"])
-  include_conflicted: boolean                      (default: false)
+  review_status:      ("candidate" | "reviewed")[]  (default: ["reviewed"])
+  max_staleness_days: integer | null                 (default: 7; null = no freshness filter)
+  include_conflicted: boolean                        (default: false)
 ```
 
-Workers should use the defaults unless they explicitly need candidate or stale context.
+`max_staleness_days` filters out items where `last_evidence_change_at > last_verified_at + interval`. Workers should use the defaults unless they explicitly need candidate or potentially stale context. A `max_staleness_days: null` call is appropriate for exploratory queries where the worker wants full coverage and will evaluate trust signals in the response.
 
 ---
 
@@ -337,7 +366,7 @@ For queries involving specific identifiers, names, or technical terms, use `sear
 
 ### Rank 4: Semantic search
 
-Use semantic search (embedding similarity via pgvector) for discovery when the worker does not know entity names or is asking a conceptual question. Semantic search is last in the cascade because it trades precision for recall. Results should always be accompanied by `review_status` and `freshness` signals so workers can filter unreliable hits.
+Use semantic search (embedding similarity via pgvector) for discovery when the worker does not know entity names or is asking a conceptual question. Semantic search is last in the cascade because it trades precision for recall. Results should always be accompanied by `review_status`, `last_verified_at`, and `last_evidence_change_at` signals so workers can evaluate the trustworthiness of hits.
 
 ### Cascade behavior
 
@@ -381,8 +410,7 @@ Do not silently collapse. Instead:
 
 1. Keep both entities as separate candidates.
 2. Create a `POSSIBLE_DUPLICATE_OF` relationship between them with `review_status: candidate`.
-3. Set `attention_state: needs_attention` on both entities.
-4. Surface the pair for human or reviewer resolution.
+3. Surface the pair for human or reviewer resolution. The presence of a `candidate` `POSSIBLE_DUPLICATE_OF` relationship is the signal; no additional `attention_state` flag is required.
 
 Once a reviewer confirms or rejects the merge, the `POSSIBLE_DUPLICATE_OF` relationship is updated to `reviewed` and either the entities are merged or the relationship is removed.
 
@@ -401,22 +429,39 @@ Staleness propagates through derivation, not through graph relationships. The sy
 | `claim` | `entity_attribute` | `ATTRIBUTE_CONTRIBUTED_BY` |
 | `claim` | `relationship` | `RELATIONSHIP_SUPPORTED_BY` |
 
+### Freshness fields
+
+Claims, entities, and relationships each carry two timestamp fields:
+
+- `last_evidence_change_at` — set to `now()` when a derivation ancestor's `content_hash` changes. Records when the evidence underlying this item last changed.
+- `last_verified_at` — set to `now()` when a reviewer marks the item as reviewed and correct. Records when the item was last confirmed.
+
+An item is considered **stale** when: `last_evidence_change_at IS NOT NULL AND (last_verified_at IS NULL OR last_evidence_change_at > last_verified_at)`.
+
+This is derived on read, not stored. No separate `freshness` enum exists. Items needing re-verification are queryable as: `WHERE last_evidence_change_at > last_verified_at AND review_status = 'reviewed'` — enabling batch re-verification workflows without relying on a synchronized stored flag.
+
 ### Staleness propagation algorithm
 
 When an artifact's `content_hash` changes on re-ingest:
 
-1. Mark all claims with `CLAIM_DERIVED_FROM` this artifact as `stale`.
-2. For each newly-stale claim, walk `ATTRIBUTE_CONTRIBUTED_BY` and `RELATIONSHIP_SUPPORTED_BY` links and mark their targets as `stale`.
-3. Repeat step 2 for any newly-stale items (BFS, bounded depth).
+1. Set `last_evidence_change_at = now()` on all claims with `CLAIM_DERIVED_FROM` this artifact.
+2. For each updated claim, walk `ATTRIBUTE_CONTRIBUTED_BY` and `RELATIONSHIP_SUPPORTED_BY` links and set `last_evidence_change_at = now()` on their targets.
+3. Repeat step 2 for any newly-updated items (BFS, bounded depth).
 
-**Stop conditions:**
+**Stop condition:**
 
-- A reviewed claim is never automatically marked stale if the reviewer explicitly confirmed it on or after the artifact's last modification date. Reviewers must re-confirm after changes; the system marks the item `needs_attention` instead.
-- Staleness does not propagate through `DEPENDS_ON`, `CONTAINS`, or other semantic relationship edges. An entity whose dependency changes is not itself stale; only items with explicit derivation links go stale.
+Propagation stops at any item where `last_verified_at >= last_evidence_change_at` (i.e., the reviewer's last verification post-dates or equals the last evidence change). Those items are current: the reviewer's confirmation already accounts for this evidence state, so updating `last_evidence_change_at` again would be incorrect. Propagation does not skip them — it simply does not need to recurse further through them, because their dependents were verified against already-current evidence.
 
-### Rationale for this model
+Staleness does not propagate through `DEPENDS_ON`, `CONTAINS`, or other semantic relationship edges. An entity whose dependency changes is not itself stale; only items with explicit derivation links receive updated timestamps.
 
-Using derivation links rather than timestamps prevents two failure modes: (1) timestamps miss transitive dependencies, and (2) graph-edge propagation over-invalidates unrelated entities. Derivation links make the propagation surface explicit and auditable.
+### Rationale for timestamp model
+
+A stored binary `freshness` enum requires the propagation pass to keep the stored value synchronized and introduces the problem of defining a valid stop condition against a field that may not be set. Timestamps solve this:
+
+- The stop condition is unambiguous: `last_verified_at >= last_evidence_change_at` is always evaluable.
+- The propagation writes `last_evidence_change_at`; reviewers write `last_verified_at`. The two writes are independent and never conflict.
+- Re-verification batches are a simple range query, not a traversal.
+- Drift detection — "evidence changed more than N days after verification" — is a single threshold comparison.
 
 ---
 
@@ -472,11 +517,11 @@ sources:
   - type: git-repo
     path: "."                      # relative to this config file
     globs: ["**/*.md", "**/*.yaml"]
-    extractors: ["markdown-doc"]
+    extractors: ["repo-file"]
 
   - type: git-repo
     path: "../other-repo"
-    extractors: ["markdown-doc"]
+    extractors: ["repo-file"]
 
   - type: linear
     team_key: "COR"
@@ -515,13 +560,16 @@ Types out of scope for v1: `interface`, `workflow`, `symbol`, `risk`.
 
 ### Extractors in scope for v1
 
-- `markdown-doc` extractor only (reads `.md` files from a git repo)
+- `repo-file` extractor (reads all in-scope files from a git repo)
 
-The extractor:
-1. Reads each Markdown file matching configured globs.
-2. Emits a raw artifact envelope per file.
-3. Runs an LLM extraction pass to produce entity candidates for the four in-scope entity types.
-4. Records derivation links (artifact → claim).
+The extractor for each file:
+1. Emits a raw artifact envelope (with stable `artifact_id` derived from logical file path, not commit SHA).
+2. Generates a short LLM summary stored as a claim.
+3. Runs file-type-specific deeper extraction:
+   - `.md`/`.mdx`: entity candidates for the four in-scope types; derivation links from artifact to each claim
+   - Code files: import-level `DEPENDS_ON` relationships to other in-scope files; exported symbol list
+   - Config and test files: summary claims only in v1 (deeper extraction post-v1)
+4. Records derivation links (artifact → claim → entity).
 
 ### MCP tools shipping in v1
 
@@ -529,8 +577,9 @@ The extractor:
 - `get_related_entities`
 - `search_context`
 - `get_project_overview`
+- `get_artifact`
 
-`search_artifacts` is deferred to post-v1 (raw evidence layer search is lower priority than summary layer search for initial workers).
+The system is summary-first: discovery happens in the summary layer (`search_context`, `get_entity`, `get_related_entities`) and raw artifacts are fetched by citation when needed (`get_artifact`). There is no `search_artifacts` tool — searching raw artifacts as a parallel discovery workflow is not a v1 worker use case.
 
 ### MCP resources shipping in v1
 
@@ -547,13 +596,14 @@ Single PostgreSQL instance with `pgvector` extension. No sharding, no read repli
 
 A worker can:
 
-1. Bootstrap a project by running `contextloom ingest --config contextloom.yaml` against a git repo containing Markdown files.
+1. Bootstrap a project by running `contextloom ingest --config contextloom.yaml` against a git repo. The `repo-file` extractor processes every in-scope file: Markdown files produce entity candidates; code files produce summaries and `DEPENDS_ON` relationships.
 2. Query for all decisions via `get_project_overview` or `context://projects/{project_id}/decisions`.
 3. Retrieve a specific decision entity with its claims and citations via `get_entity`.
 4. Search for context about an unfamiliar term via `search_context`.
 5. Traverse from a component to its decisions via `get_related_entities`.
+6. Fetch the source text behind a cited claim via `get_artifact` using the `artifact_id` from the citation.
 
-This loop covers the full pipeline and is sufficient to validate the architecture before adding more extractors or entity types.
+This loop covers the full pipeline — including repo-wide file coverage and artifact citation retrieval — and is sufficient to validate the architecture before adding more extractors or entity types.
 
 ---
 
