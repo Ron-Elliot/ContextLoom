@@ -1,0 +1,2 @@
+ALTER TABLE claims
+  ALTER COLUMN value TYPE JSONB USING value::JSONB;
