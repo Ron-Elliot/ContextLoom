@@ -10,14 +10,25 @@ const CONTEXTLOOM_ARTIFACT_NAMESPACE = uuidv5.URL;
 // artifact_id = uuidv5(CONTEXTLOOM_ARTIFACT_NAMESPACE,
 //   "artifact:v1" + "\x00" + project_id + "\x00" + source_type + "\x00" + canonical_source_uri)
 // canonical_source_uri: repo-relative POSIX path, no leading "./", no commit SHA, "/" separators.
-function toCanonicalUri(relFilePath: string): string {
+export function toCanonicalUri(relFilePath: string): string {
   return relFilePath.replace(/\\/g, '/').replace(/^\.\//, '');
 }
 
-function assertNoNul(value: string, label: string): void {
+export function assertNoNul(value: string, label: string): void {
   if (value.includes('\x00')) {
     throw new Error(`UUID v5 component "${label}" must not contain NUL bytes`);
   }
+}
+
+export function buildArtifactId(projectId: string, sourceType: string, sourceUri: string): string {
+  assertNoNul(projectId, 'project_id');
+  assertNoNul(sourceType, 'source_type');
+  const canonical = toCanonicalUri(sourceUri);
+  assertNoNul(canonical, 'source_uri');
+  return uuidv5(
+    `artifact:v1\x00${projectId}\x00${sourceType}\x00${canonical}`,
+    CONTEXTLOOM_ARTIFACT_NAMESPACE
+  );
 }
 
 export interface Provenance {
@@ -45,13 +56,7 @@ export function buildEnvelope(
   sourceType: string
 ): Envelope {
   const source_uri = toCanonicalUri(relFilePath);
-  assertNoNul(projectId, 'project_id');
-  assertNoNul(sourceType, 'source_type');
-  assertNoNul(source_uri, 'source_uri');
-  const artifact_id = uuidv5(
-    `artifact:v1\x00${projectId}\x00${sourceType}\x00${source_uri}`,
-    CONTEXTLOOM_ARTIFACT_NAMESPACE
-  );
+  const artifact_id = buildArtifactId(projectId, sourceType, source_uri);
   const artifact_version_id = uuidv4();
 
   const absPath = path.join(repoPath, relFilePath);
