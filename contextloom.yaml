@@ -1,0 +1,13 @@
+project_id: contextloom
+name: ContextLoom
+sources:
+  - type: git-repo
+    path: .
+    globs:
+      - '**/*.ts'
+      - '**/*.md'
+      - '**/*.yaml'
+      - '**/*.json'
+    extractors:
+      - default
+cross_project_links: []

@@ -1,0 +1,33 @@
+{
+  "name": "contextloom",
+  "version": "0.1.0",
+  "description": "A project-state knowledge system for AI workers",
+  "main": "dist/index.js",
+  "bin": {
+    "contextloom": "./bin/contextloom.js"
+  },
+  "scripts": {
+    "build": "tsc --noEmit && tsc",
+    "migrate": "ts-node src/migrate.ts",
+    "lint": "eslint 'src/**/*.ts' && prettier --check 'src/**/*.ts'",
+    "lint:fix": "eslint 'src/**/*.ts' --fix && prettier --write 'src/**/*.ts'"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "js-yaml": "^4.1.0",
+    "pg": "^8.11.5",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.14.0",
+    "@types/pg": "^8.11.6",
+    "@typescript-eslint/eslint-plugin": "^7.13.0",
+    "@typescript-eslint/parser": "^7.13.0",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.3.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.2"
+  }
+}
