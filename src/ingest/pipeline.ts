@@ -2,7 +2,10 @@ import path from 'path';
 import { Config } from '../config';
 import pool from '../db';
 import { writeArtifact } from './artifactWriter';
+import { writeClaims } from './claimWriter';
+import { writeEntities } from './entityWriter';
 import { buildEnvelope } from './envelope';
+import { extractFromFile } from './extractor';
 import { walkFiles } from './walker';
 
 export async function runIngest(config: Config, configPath: string): Promise<void> {
@@ -24,7 +27,14 @@ export async function runIngest(config: Config, configPath: string): Promise<voi
         const envelope = buildEnvelope(repoPath, relPath, config.project_id, source.type);
         const { changed } = await writeArtifact(config.project_id, source.type, envelope);
         totalFiles++;
-        if (changed) changedFiles++;
+        if (changed) {
+          changedFiles++;
+          const result = await extractFromFile(relPath, envelope.content);
+          await writeClaims(envelope.artifact_id, envelope.artifact_version_id, result);
+          if (result.entities && result.entities.length > 0) {
+            await writeEntities(config.project_id, result.entities);
+          }
+        }
       } catch (err) {
         const message = (err as Error).message;
         console.error(`Error processing ${relPath}: ${message}`);
