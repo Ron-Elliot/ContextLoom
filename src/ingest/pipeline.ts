@@ -10,6 +10,7 @@ export async function runIngest(config: Config, configPath: string): Promise<voi
 
   let totalFiles = 0;
   let changedFiles = 0;
+  const failures: Array<{ file: string; error: string }> = [];
 
   for (const source of config.sources) {
     const repoPath = path.resolve(configDir, source.path);
@@ -25,11 +26,22 @@ export async function runIngest(config: Config, configPath: string): Promise<voi
         totalFiles++;
         if (changed) changedFiles++;
       } catch (err) {
-        console.error(`Error processing ${relPath}: ${(err as Error).message}`);
+        const message = (err as Error).message;
+        console.error(`Error processing ${relPath}: ${message}`);
+        failures.push({ file: relPath, error: message });
       }
     }
   }
 
-  console.log(`Ingest complete: ${totalFiles} files processed, ${changedFiles} new or changed`);
   await pool.end();
+
+  if (failures.length > 0) {
+    console.error(`\nIngest failed: ${failures.length} file(s) could not be processed:`);
+    for (const { file, error } of failures) {
+      console.error(`  ${file}: ${error}`);
+    }
+    throw new Error(`Ingest failed with ${failures.length} file error(s)`);
+  }
+
+  console.log(`Ingest complete: ${totalFiles} files processed, ${changedFiles} new or changed`);
 }

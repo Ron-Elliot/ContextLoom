@@ -4,7 +4,21 @@ import { readFileSync } from 'fs';
 import path from 'path';
 import { v4 as uuidv4, v5 as uuidv5 } from 'uuid';
 
-const NAMESPACE = uuidv5.URL;
+// Stable namespace for all ContextLoom artifact IDs.
+const CONTEXTLOOM_ARTIFACT_NAMESPACE = uuidv5.URL;
+
+// artifact_id = uuidv5(CONTEXTLOOM_ARTIFACT_NAMESPACE,
+//   "artifact:v1" + "\x00" + project_id + "\x00" + source_type + "\x00" + canonical_source_uri)
+// canonical_source_uri: repo-relative POSIX path, no leading "./", no commit SHA, "/" separators.
+function toCanonicalUri(relFilePath: string): string {
+  return relFilePath.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function assertNoNul(value: string, label: string): void {
+  if (value.includes('\x00')) {
+    throw new Error(`UUID v5 component "${label}" must not contain NUL bytes`);
+  }
+}
 
 export interface Provenance {
   commit_sha: string;
@@ -30,13 +44,20 @@ export function buildEnvelope(
   projectId: string,
   sourceType: string
 ): Envelope {
-  const source_uri = relFilePath;
-  const artifact_id = uuidv5(`${projectId}\x00${sourceType}\x00${source_uri}`, NAMESPACE);
+  const source_uri = toCanonicalUri(relFilePath);
+  assertNoNul(projectId, 'project_id');
+  assertNoNul(sourceType, 'source_type');
+  assertNoNul(source_uri, 'source_uri');
+  const artifact_id = uuidv5(
+    `artifact:v1\x00${projectId}\x00${sourceType}\x00${source_uri}`,
+    CONTEXTLOOM_ARTIFACT_NAMESPACE
+  );
   const artifact_version_id = uuidv4();
 
   const absPath = path.join(repoPath, relFilePath);
-  const content = readFileSync(absPath, 'utf8');
-  const content_hash = createHash('sha256').update(content).digest('hex');
+  const rawBytes = readFileSync(absPath);
+  const content_hash = createHash('sha256').update(rawBytes).digest('hex');
+  const content = rawBytes.toString('utf8');
 
   const gitOutput = execFileSync('git', ['log', '-1', '--format=%H\t%ae\t%aI', '--', relFilePath], {
     cwd: repoPath,
