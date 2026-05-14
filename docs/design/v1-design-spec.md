@@ -163,13 +163,20 @@ Staleness is derived, not stored: an entity is considered stale when `last_evide
 
 #### Claims
 
-Consequential facts about an entity are stored as separate `claim` rows rather than inline entity fields. This enables claim-level citation and review.
+Claims are a single record type with a **generic subject model**: the subject of a claim can be either an entity or an artifact.
 
 ```
-entity_id + claim_type + claim_value + source_artifact_ids + review_status + last_verified_at + last_evidence_change_at
+subject_type + subject_id + claim_type + claim_value + source_artifact_ids + review_status + last_verified_at + last_evidence_change_at
 ```
 
-Example claim types: `has_responsibility`, `has_constraint`, `implements_interface`, `superseded_by`, `depends_on`.
+- `subject_type`: `entity | artifact`
+- `subject_id`: the UUID of the entity or artifact this claim is attached to
+
+This single schema handles both:
+- **Entity claims** (`subject_type = entity`): consequential facts about a summary-layer entity — e.g., `has_responsibility`, `has_constraint`, `implements_interface`, `superseded_by`.
+- **Artifact claims** (`subject_type = artifact`): facts extracted directly from a raw artifact record — e.g., `summary` (the LLM-generated file summary), `imports` (list of imported file paths), `exported_symbols`, `config_key_value`.
+
+There is no separate artifact-claim record type. Both entity claims and artifact claims use the same `claim` table, distinguished by `subject_type`. The choice between them follows naturally: if the fact is about a summary-layer entity, the subject is that entity; if the fact is about a raw file (and there is no entity to attach it to), the subject is the artifact.
 
 ### Relationship types
 
@@ -266,7 +273,7 @@ Input:
 
 Output:
   entity:    Entity
-  claims:    Claim[]          (if include_claims)
+  claims:    EntityClaim[]    (if include_claims — claims where subject_type = entity)
   citations: ArtifactRef[]    (if include_citations)
 ```
 
@@ -290,7 +297,7 @@ Output:
 
 #### `search_context`
 
-Semantic and lexical search over the summary layer.
+Semantic and lexical search over the entity summary layer. Searches entities and entity claims (`subject_type = entity`) only. Artifact claims (`subject_type = artifact`) are not indexed for search; access them via `get_artifact`.
 
 ```
 Input:
@@ -301,12 +308,12 @@ Input:
   limit:        integer  (default: 10, max: 50)
 
 Output:
-  results: SearchResult[]  (entity + score + matched_claims + citations)
+  results: SearchResult[]  (entity + score + matched_entity_claims + citations)
 ```
 
 #### `get_artifact`
 
-Fetch a specific raw artifact by ID. Used for targeted evidence access when a worker needs to read the source text behind a cited claim or entity. Discovery happens in the summary layer; raw artifacts are fetched by citation rather than searched as a main interface.
+Fetch a specific raw artifact by ID, including its extracted claims. Used for targeted evidence access when a worker needs to read the source text behind a cited claim or entity. Discovery happens in the summary layer; raw artifacts are fetched by citation rather than searched as a main interface.
 
 ```
 Input:
@@ -314,8 +321,13 @@ Input:
   artifact_version_id: string  (optional — fetches latest version if omitted)
 
 Output:
-  artifact: ArtifactEnvelope  (envelope + content or content_ref + provenance)
+  artifact: ArtifactEnvelope          (envelope + content or content_ref + provenance)
+  claims:   ArtifactClaim[]           (all claims with subject_type = artifact for this artifact_id)
 ```
+
+`ArtifactClaim` is the standard `Claim` record filtered to `subject_type = artifact`. For a code file this would include the `summary` claim and any `imports` claims. For a Markdown file it would include the `summary` claim. The full claim schema is defined in Section 3.
+
+Artifact claims are **not** searched by `search_context`. The `search_context` tool operates on the entity summary layer only (entities and entity claims where `subject_type = entity`). To access artifact claims, use `get_artifact` with the `artifact_id` from a citation. This keeps the worker read path summary-first: workers discover context through entity search, then pull raw evidence and artifact-level claims by citation when needed.
 
 #### `get_project_overview`
 
