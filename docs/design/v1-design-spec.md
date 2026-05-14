@@ -128,18 +128,20 @@ Other field rules:
 
 The summary layer uses a typed entity model. All entities share a common base, and type-specific fields are carried in a JSONB `attributes` column.
 
-#### v1 entity types
+#### Entity types
 
-| Type | Description |
-|---|---|
-| `project` | The context namespace. One per configured project. |
-| `component` | A major functional or structural part of the project (service, library, module, subsystem). |
-| `decision` | An architectural or design decision. ADRs are the canonical source. |
-| `constraint` | A requirement, invariant, or hard limitation that shapes the project. |
-| `interface` | A named API, protocol, or contract between components. |
-| `workflow` | A defined process or pipeline in the project. |
+V1 ships four entity types. The full planned type surface (including post-v1 types) is listed below; Section 11 is the authoritative v1 scope.
 
-Types deferred to post-v1: `symbol`, `risk`, `dependency` (external package), `schema`.
+| Type | Scope | Description |
+|---|---|---|
+| `project` | v1 | The context namespace. One per configured project. |
+| `component` | v1 | A major functional or structural part of the project (service, library, module, subsystem). |
+| `decision` | v1 | An architectural or design decision. ADRs are the canonical source. |
+| `constraint` | v1 | A requirement, invariant, or hard limitation that shapes the project. |
+| `interface` | post-v1 | A named API, protocol, or contract between components. |
+| `workflow` | post-v1 | A defined process or pipeline in the project. |
+
+Types deferred to post-v1: `interface`, `workflow`, `symbol`, `risk`, `dependency` (external package), `schema`.
 
 #### Entity base attributes
 
@@ -182,6 +184,8 @@ Example claim types: `has_responsibility`, `has_constraint`, `implements_interfa
 | `RELATED_TO` | any | any | General association, weakly typed |
 | `POSSIBLE_DUPLICATE_OF` | any | any | Candidate merge, not yet resolved |
 
+In v1, relationship endpoints are limited to the four v1 entity types (`project`, `component`, `decision`, `constraint`). Relationships whose domain or range includes `interface` or `workflow` apply only when those post-v1 entity types are available. For example, `DEPENDS_ON` in v1 has effective domain `component` and effective range `component`.
+
 Relationships carry: `relationship_id`, `source_entity_id`, `target_entity_id`, `type`, `review_status`, `last_verified_at`, `last_evidence_change_at`, `citation_artifact_ids`.
 
 ---
@@ -204,14 +208,26 @@ Every in-scope file gets:
 
 1. A raw artifact envelope with the file content and git provenance (see Section 2).
 2. A short LLM-generated summary (1-3 sentences) stored as a `summary` claim on the artifact record, with a citation back to the specific `artifact_version_id`.
-3. Explicit relationships where discoverable (imports, dependencies, references).
+3. File-type-specific claims (import lists, key-value pairs, behavioral descriptions) — see extraction depth table below.
+
+#### Files are artifacts, not entities
+
+Files live in the **raw evidence layer** as artifact records. They are not entities in the summary layer. The summary layer contains entities (`component`, `decision`, `constraint`, `project`) which are derived from or supported by artifact evidence — but a file itself is not an entity.
+
+This distinction shapes how file-to-file relationships work in v1:
+
+- There is no file entity type. The `DEPENDS_ON` relationship in Section 3 has domain `component` and range `component` — it relates summary-layer entities, not raw files.
+- Import-level dependencies extracted from code files are stored as **import claims** on the artifact record (a claim listing the file paths imported by that file). They are not entity-level `DEPENDS_ON` relationships.
+- Entity-level `DEPENDS_ON` relationships between `component` entities are a post-v1 concern. They require a component-mapping step that groups files into components and aggregates file-level import claims into component-to-component relationships.
+
+In v1, the import claims on artifact records are sufficient to answer "what does this file depend on?" and to validate that the extraction pipeline captures dependency structure. Entity-level dependency relationships between components are the next step.
 
 Extraction depth varies by file type:
 
 | File type | Extraction |
 |---|---|
-| `.md`, `.mdx` | Full entity extraction: decisions (ADR frontmatter or heading patterns), components, constraints, interfaces; derivation links from artifact to each entity/claim |
-| Code files (`.ts`, `.tsx`, `.js`, `.py`, `.go`, `.rb`, etc.) | Summary + import/dependency extraction: file-level `DEPENDS_ON` relationships to other in-scope files; list of exported symbols as claims |
+| `.md`, `.mdx` | Full entity extraction: decisions (ADR frontmatter or heading patterns), components, constraints; derivation links from artifact to each entity/claim |
+| Code files (`.ts`, `.tsx`, `.js`, `.py`, `.go`, `.rb`, etc.) | Summary + import claims: a claim on the artifact record listing imported file paths; list of exported symbols as claims |
 | Config files (`.yaml`, `.json`, `.toml`, `.env`, etc.) | Summary + key-value extraction: notable config keys and values as claims |
 | Test files (`*.test.*`, `*.spec.*`, `*_test.*`) | Summary + behavioral assertion descriptions: what the test covers as a claim |
 | All other in-scope files | Summary only |
@@ -219,7 +235,7 @@ Extraction depth varies by file type:
 This gives the system:
 - Repo-wide artifact coverage with no second-class files
 - Per-file summaries queryable through the summary layer
-- File-to-file dependency relationships derived from imports and references
+- File-level import dependency data stored as claims on artifact records
 - A path from file intelligence to higher-order entities (a component may map to a directory or package; decisions map from ADRs)
 
 #### v1 extractor scope
@@ -317,19 +333,21 @@ Output:
   staleness_summary: StalenessSummary  (counts of stale / current / unverified items)
 ```
 
-### MCP Resources (v1)
+### MCP Resources
 
 Resources are addressable by URI. They return the current state of the identified object without additional input parameters.
 
-| Resource URI | Returns |
-|---|---|
-| `context://projects/{project_id}` | Project entity + overview |
-| `context://projects/{project_id}/components` | All component entities in the project |
-| `context://projects/{project_id}/decisions` | All decision entities in the project |
-| `context://projects/{project_id}/constraints` | All constraint entities in the project |
-| `context://entities/{entity_id}` | Single entity with claims |
-| `context://entities/{entity_id}/claims` | Claims for an entity |
-| `context://entities/{entity_id}/relationships` | Direct relationships for an entity |
+The table below shows the **full planned resource surface**. V1 ships a subset of these; Section 11 is the authoritative v1 resource list. This section documents what the eventual surface looks like so implementers can design URI structure consistently from the start.
+
+| Resource URI | Returns | Scope |
+|---|---|---|
+| `context://projects/{project_id}` | Project entity + overview | v1 |
+| `context://projects/{project_id}/components` | All component entities in the project | v1 |
+| `context://projects/{project_id}/decisions` | All decision entities in the project | v1 |
+| `context://projects/{project_id}/constraints` | All constraint entities in the project | post-v1 |
+| `context://entities/{entity_id}` | Single entity with claims | v1 |
+| `context://entities/{entity_id}/claims` | Claims for an entity | post-v1 |
+| `context://entities/{entity_id}/relationships` | Direct relationships for an entity | post-v1 |
 
 Resource URIs use `project_id` values from the project config (see Section 10). `entity_id` values are UUIDs from the summary layer.
 
@@ -567,7 +585,7 @@ The extractor for each file:
 2. Generates a short LLM summary stored as a claim.
 3. Runs file-type-specific deeper extraction:
    - `.md`/`.mdx`: entity candidates for the four in-scope types; derivation links from artifact to each claim
-   - Code files: import-level `DEPENDS_ON` relationships to other in-scope files; exported symbol list
+   - Code files: import claims on the artifact record (a claim listing imported file paths); exported symbol list as claims
    - Config and test files: summary claims only in v1 (deeper extraction post-v1)
 4. Records derivation links (artifact → claim → entity).
 
@@ -596,7 +614,7 @@ Single PostgreSQL instance with `pgvector` extension. No sharding, no read repli
 
 A worker can:
 
-1. Bootstrap a project by running `contextloom ingest --config contextloom.yaml` against a git repo. The `repo-file` extractor processes every in-scope file: Markdown files produce entity candidates; code files produce summaries and `DEPENDS_ON` relationships.
+1. Bootstrap a project by running `contextloom ingest --config contextloom.yaml` against a git repo. The `repo-file` extractor processes every in-scope file: Markdown files produce entity candidates; code files produce summaries and import claims on their artifact records.
 2. Query for all decisions via `get_project_overview` or `context://projects/{project_id}/decisions`.
 3. Retrieve a specific decision entity with its claims and citations via `get_entity`.
 4. Search for context about an unfamiliar term via `search_context`.
