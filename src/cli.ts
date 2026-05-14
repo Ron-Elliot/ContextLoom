@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { loadConfig } from './config';
+import { runIngest } from './ingest/pipeline';
 
 const program = new Command();
 
@@ -14,8 +15,8 @@ program
   .requiredOption('--config <path>', 'Path to contextloom.yaml config file')
   .action(async (options: { config: string }) => {
     try {
-      await loadConfig(options.config);
-      console.log('not implemented');
+      const config = await loadConfig(options.config);
+      await runIngest(config, options.config);
       process.exit(0);
     } catch (err) {
       console.error((err as Error).message);
