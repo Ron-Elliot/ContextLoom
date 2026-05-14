@@ -14,5 +14,9 @@ CREATE TABLE IF NOT EXISTS artifact_versions (
   content             TEXT,
   content_ref         TEXT,
   provenance          JSONB       NOT NULL DEFAULT '{}',
+  source_modified_at  TIMESTAMPTZ,
+  extractor           TEXT,
+  tags                JSONB       NOT NULL DEFAULT '[]',
+  envelope_version    TEXT        NOT NULL DEFAULT '1',
   ingested_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );

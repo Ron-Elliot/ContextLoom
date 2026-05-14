@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS claims (
                             CHECK (subject_type IN ('entity', 'artifact')),
   subject_id              UUID        NOT NULL,
   claim_type              TEXT        NOT NULL,
-  value                   TEXT        NOT NULL,
+  value                   JSONB       NOT NULL,
   review_status           TEXT        NOT NULL DEFAULT 'candidate'
                             CHECK (review_status IN ('candidate', 'reviewed', 'rejected')),
   last_verified_at        TIMESTAMPTZ,

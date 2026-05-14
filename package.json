@@ -7,7 +7,8 @@
     "contextloom": "./bin/contextloom.js"
   },
   "scripts": {
-    "build": "tsc --noEmit && tsc",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
     "migrate": "ts-node src/migrate.ts",
     "lint": "eslint 'src/**/*.ts' && prettier --check 'src/**/*.ts'",
     "lint:fix": "eslint 'src/**/*.ts' --fix && prettier --write 'src/**/*.ts'"
