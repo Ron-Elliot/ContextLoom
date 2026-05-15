@@ -3,9 +3,12 @@ import { Config } from '../config';
 import pool from '../db';
 import { writeArtifact } from './artifactWriter';
 import { writeClaims } from './claimWriter';
+import { embedEntities } from './embedder';
 import { writeEntities } from './entityWriter';
 import { buildEnvelope } from './envelope';
 import { extractFromFile } from './extractor';
+import { reconcileEntities } from './reconciler';
+import { propagateStaleness } from './staleness';
 import { walkFiles } from './walker';
 
 export async function runIngest(config: Config, configPath: string): Promise<void> {
@@ -14,6 +17,7 @@ export async function runIngest(config: Config, configPath: string): Promise<voi
   let totalFiles = 0;
   let changedFiles = 0;
   const failures: Array<{ file: string; error: string }> = [];
+  const allEntityIds: string[] = [];
 
   for (const source of config.sources) {
     const repoPath = path.resolve(configDir, source.path);
@@ -32,8 +36,10 @@ export async function runIngest(config: Config, configPath: string): Promise<voi
           const result = await extractFromFile(relPath, envelope.content);
           await writeClaims(envelope.artifact_id, envelope.artifact_version_id, result);
           if (result.entities && result.entities.length > 0) {
-            await writeEntities(config.project_id, result.entities);
+            const entityIds = await writeEntities(config.project_id, result.entities);
+            allEntityIds.push(...entityIds);
           }
+          await propagateStaleness(envelope.artifact_version_id);
         }
       } catch (err) {
         const message = (err as Error).message;
@@ -41,6 +47,11 @@ export async function runIngest(config: Config, configPath: string): Promise<voi
         failures.push({ file: relPath, error: message });
       }
     }
+  }
+
+  if (allEntityIds.length > 0) {
+    await embedEntities(allEntityIds);
+    await reconcileEntities(config.project_id, allEntityIds);
   }
 
   await pool.end();
