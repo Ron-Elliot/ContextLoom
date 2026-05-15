@@ -12,7 +12,7 @@ export async function writeEntities(
   try {
     await client.query('BEGIN');
     for (const entity of entities) {
-      await upsertEntity(client, projectId, entity);
+      await insertEntity(client, projectId, entity);
     }
     await client.query('COMMIT');
   } catch (err) {
@@ -23,17 +23,14 @@ export async function writeEntities(
   }
 }
 
-async function upsertEntity(
+async function insertEntity(
   client: PoolClient,
   projectId: string,
   entity: EntityExtraction
 ): Promise<void> {
   const { rows } = await client.query<{ entity_id: string }>(
-    `INSERT INTO entities (project_id, entity_type, name, description)
-     VALUES ($1, $2, $3, $4)
-     ON CONFLICT (project_id, entity_type, name) DO UPDATE
-       SET description = EXCLUDED.description,
-           updated_at = now()
+    `INSERT INTO entities (project_id, entity_type, name, description, review_status)
+     VALUES ($1, $2, $3, $4, 'candidate')
      RETURNING entity_id`,
     [projectId, entity.entity_type, entity.name, entity.description]
   );
@@ -42,21 +39,21 @@ async function upsertEntity(
   if (!entityId) return;
 
   for (const { key, value } of entity.attributes) {
-    await insertEntityAttributeWithDerivation(client, entityId, key, value);
+    await insertEntityClaimWithDerivation(client, entityId, key, value);
   }
 }
 
-async function insertEntityAttributeWithDerivation(
+async function insertEntityClaimWithDerivation(
   client: PoolClient,
   entityId: string,
-  key: string,
+  claimType: string,
   value: string
 ): Promise<void> {
   const { rows } = await client.query<{ claim_id: string }>(
-    `INSERT INTO claims (subject_type, subject_id, claim_type, value)
-     VALUES ('entity', $1, 'attribute', $2)
+    `INSERT INTO claims (subject_type, subject_id, claim_type, value, review_status)
+     VALUES ('entity', $1, $2, $3, 'candidate')
      RETURNING claim_id`,
-    [entityId, JSON.stringify({ key, value })]
+    [entityId, claimType, JSON.stringify({ value })]
   );
 
   const claimId = rows[0]?.claim_id;

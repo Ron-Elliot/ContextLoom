@@ -70,7 +70,14 @@ const SYSTEM_PROMPTS: Record<string, string> = {
 Return a JSON object with:
 - summary: string (1-2 sentence summary)
 - entities: array of { entity_type: "project"|"decision"|"component"|"constraint", name: string, description: string, attributes: [{key: string, value: string}] }
-For ADRs, extract them as decisions. For components/services/tools mentioned, extract as component. Only include entities actually described in the file.`,
+
+For attributes, use only the typed keys appropriate to each entity_type:
+- project: "summary", "intent"
+- decision: "summary", "rationale", "context", "consequences"
+- component: "summary", "responsibilities", "dependencies"
+- constraint: "description", "rationale"
+
+For ADRs, extract them as entity_type "decision". For components/services/tools mentioned, extract as entity_type "component". Only include entities actually described in the file.`,
   code: `You are a code repository analyzer. Extract structured information from this source code file.
 Return a JSON object with:
 - summary: string (1-2 sentence summary of what this file does)
