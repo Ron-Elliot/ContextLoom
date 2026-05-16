@@ -10,13 +10,16 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "migrate": "ts-node src/migrate.ts",
+    "test": "node --require ts-node/register --test src/ingest/envelope.test.ts src/ingest/staleness.test.ts",
     "lint": "eslint 'src/**/*.ts' && prettier --check 'src/**/*.ts'",
     "lint:fix": "eslint 'src/**/*.ts' --fix && prettier --write 'src/**/*.ts'"
   },
   "dependencies": {
     "commander": "^12.1.0",
     "js-yaml": "^4.1.0",
+    "openai": "^4.28.0",
     "pg": "^8.11.5",
+    "uuid": "^11.0.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

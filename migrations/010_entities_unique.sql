@@ -1,0 +1,4 @@
+-- Migration 010: no-op
+-- UNIQUE(project_id, entity_type, name) was intentionally not added.
+-- Name equality is not strong evidence for entity merge.
+-- Each extraction inserts a candidate entity row; reconciliation (COR-738) decides merges.
