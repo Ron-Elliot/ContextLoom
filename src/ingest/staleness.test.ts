@@ -39,17 +39,23 @@ function makeClient(
   return { client, updated };
 }
 
-test('BFS propagates last_evidence_change_at from artifact_version through claim to entity', async () => {
+// Real ingest data shape written by entityWriter for entity attribute claims:
+//   CLAIM_DERIVED_FROM:       artifact_version → entity_attr_claim
+//   ATTRIBUTE_CONTRIBUTED_BY: entity_attr_claim → entity
+// Both links are required; without CLAIM_DERIVED_FROM the BFS never discovers the claim.
+test('BFS propagates last_evidence_change_at through entity attribute claim chain', async () => {
   const links: Link[] = [
+    // CLAIM_DERIVED_FROM: artifact_version → entity_attr_claim (written by entityWriter)
     {
       source_type: 'artifact_version',
       source_id: 'av-1',
       target_type: 'claim',
-      target_id: 'claim-1',
+      target_id: 'entity-attr-claim-1',
     },
+    // ATTRIBUTE_CONTRIBUTED_BY: entity_attr_claim → entity (written by entityWriter)
     {
       source_type: 'claim',
-      source_id: 'claim-1',
+      source_id: 'entity-attr-claim-1',
       target_type: 'entity',
       target_id: 'entity-1',
     },
@@ -58,8 +64,37 @@ test('BFS propagates last_evidence_change_at from artifact_version through claim
   const { client, updated } = makeClient(links);
   await propagateStalenessWith(client, 'av-1');
 
-  assert.ok(updated.includes('claim:claim-1'), 'claim-1 should be marked stale');
-  assert.ok(updated.includes('entity:entity-1'), 'entity-1 should be marked stale');
+  assert.ok(
+    updated.includes('claim:entity-attr-claim-1'),
+    'entity attribute claim should be marked stale'
+  );
+  assert.ok(updated.includes('entity:entity-1'), 'entity should be marked stale');
+});
+
+// Without the CLAIM_DERIVED_FROM link (the pre-fix bug state), entity attr claims
+// are not reachable from artifact_version and BFS cannot mark them stale.
+test('BFS does not reach entity attribute claims when CLAIM_DERIVED_FROM link is absent', async () => {
+  const links: Link[] = [
+    // Only ATTRIBUTE_CONTRIBUTED_BY exists — no entry point from artifact_version
+    {
+      source_type: 'claim',
+      source_id: 'entity-attr-claim-1',
+      target_type: 'entity',
+      target_id: 'entity-1',
+    },
+  ];
+
+  const { client, updated } = makeClient(links);
+  await propagateStalenessWith(client, 'av-1');
+
+  assert.ok(
+    !updated.includes('claim:entity-attr-claim-1'),
+    'claim should not be reached without CLAIM_DERIVED_FROM link'
+  );
+  assert.ok(
+    !updated.includes('entity:entity-1'),
+    'entity should not be reached without CLAIM_DERIVED_FROM link'
+  );
 });
 
 test('BFS stops propagation at already-verified items and does not update downstream', async () => {

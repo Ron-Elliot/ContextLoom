@@ -4,7 +4,8 @@ import { EntityExtraction } from './extractor';
 
 export async function writeEntities(
   projectId: string,
-  entities: EntityExtraction[]
+  entities: EntityExtraction[],
+  artifactVersionId: string
 ): Promise<string[]> {
   if (entities.length === 0) return [];
 
@@ -13,7 +14,7 @@ export async function writeEntities(
   try {
     await client.query('BEGIN');
     for (const entity of entities) {
-      const entityId = await insertEntity(client, projectId, entity);
+      const entityId = await insertEntity(client, projectId, artifactVersionId, entity);
       if (entityId) entityIds.push(entityId);
     }
     await client.query('COMMIT');
@@ -29,6 +30,7 @@ export async function writeEntities(
 async function insertEntity(
   client: PoolClient,
   projectId: string,
+  artifactVersionId: string,
   entity: EntityExtraction
 ): Promise<string | undefined> {
   const { rows } = await client.query<{ entity_id: string }>(
@@ -42,7 +44,7 @@ async function insertEntity(
   if (!entityId) return undefined;
 
   for (const { key, value } of entity.attributes) {
-    await insertEntityClaimWithDerivation(client, entityId, key, value);
+    await insertEntityClaimWithDerivation(client, entityId, artifactVersionId, key, value);
   }
   return entityId;
 }
@@ -50,6 +52,7 @@ async function insertEntity(
 async function insertEntityClaimWithDerivation(
   client: PoolClient,
   entityId: string,
+  artifactVersionId: string,
   claimType: string,
   value: string
 ): Promise<void> {
@@ -62,6 +65,13 @@ async function insertEntityClaimWithDerivation(
 
   const claimId = rows[0]?.claim_id;
   if (!claimId) return;
+
+  // BFS chain: artifact_version → entity_attr_claim → entity
+  await client.query(
+    `INSERT INTO derivation_links (link_type, source_type, source_id, target_type, target_id)
+     VALUES ('CLAIM_DERIVED_FROM', 'artifact_version', $1, 'claim', $2)`,
+    [artifactVersionId, claimId]
+  );
 
   await client.query(
     `INSERT INTO derivation_links (link_type, source_type, source_id, target_type, target_id)

@@ -36,7 +36,11 @@ export async function runIngest(config: Config, configPath: string): Promise<voi
           const result = await extractFromFile(relPath, envelope.content);
           await writeClaims(envelope.artifact_id, envelope.artifact_version_id, result);
           if (result.entities && result.entities.length > 0) {
-            const entityIds = await writeEntities(config.project_id, result.entities);
+            const entityIds = await writeEntities(
+              config.project_id,
+              result.entities,
+              envelope.artifact_version_id
+            );
             allEntityIds.push(...entityIds);
           }
           await propagateStaleness(envelope.artifact_version_id);
