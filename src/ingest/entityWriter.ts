@@ -5,14 +5,16 @@ import { EntityExtraction } from './extractor';
 export async function writeEntities(
   projectId: string,
   entities: EntityExtraction[]
-): Promise<void> {
-  if (entities.length === 0) return;
+): Promise<string[]> {
+  if (entities.length === 0) return [];
 
   const client = await pool.connect();
+  const entityIds: string[] = [];
   try {
     await client.query('BEGIN');
     for (const entity of entities) {
-      await insertEntity(client, projectId, entity);
+      const entityId = await insertEntity(client, projectId, entity);
+      if (entityId) entityIds.push(entityId);
     }
     await client.query('COMMIT');
   } catch (err) {
@@ -21,13 +23,14 @@ export async function writeEntities(
   } finally {
     client.release();
   }
+  return entityIds;
 }
 
 async function insertEntity(
   client: PoolClient,
   projectId: string,
   entity: EntityExtraction
-): Promise<void> {
+): Promise<string | undefined> {
   const { rows } = await client.query<{ entity_id: string }>(
     `INSERT INTO entities (project_id, entity_type, name, description, review_status)
      VALUES ($1, $2, $3, $4, 'candidate')
@@ -36,11 +39,12 @@ async function insertEntity(
   );
 
   const entityId = rows[0]?.entity_id;
-  if (!entityId) return;
+  if (!entityId) return undefined;
 
   for (const { key, value } of entity.attributes) {
     await insertEntityClaimWithDerivation(client, entityId, key, value);
   }
+  return entityId;
 }
 
 async function insertEntityClaimWithDerivation(
