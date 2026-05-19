@@ -124,15 +124,23 @@ export async function fetchArtifactVersion(
 
 export async function fetchArtifactClaims(
   pool: Pool,
-  artifactId: string
+  artifactVersionId: string
 ): Promise<ArtifactClaim[]> {
+  // Filter through derivation_links so only claims derived from this specific
+  // artifact_version are returned, not claims from other versions of the same artifact.
   const result = await pool.query<ArtifactClaim>(
-    `SELECT claim_id, subject_type, subject_id, claim_type, value,
-            review_status, last_verified_at, last_evidence_change_at,
-            metadata, created_at, updated_at
-     FROM claims
-     WHERE subject_type = 'artifact' AND subject_id = $1`,
-    [artifactId]
+    `SELECT c.claim_id, c.subject_type, c.subject_id, c.claim_type, c.value,
+            c.review_status, c.last_verified_at, c.last_evidence_change_at,
+            c.metadata, c.created_at, c.updated_at
+     FROM claims c
+     JOIN derivation_links dl
+       ON dl.link_type = 'CLAIM_DERIVED_FROM'
+      AND dl.source_type = 'artifact_version'
+      AND dl.source_id = $1
+      AND dl.target_type = 'claim'
+      AND dl.target_id = c.claim_id
+     WHERE c.subject_type = 'artifact'`,
+    [artifactVersionId]
   );
   return result.rows;
 }

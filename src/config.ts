@@ -17,7 +17,7 @@ const CrossProjectLinkSchema = z.object({
 const TrustFilterConfigSchema = z.object({
   allow_review_statuses: z.array(z.string()).default(['reviewed']),
   include_conflicted: z.boolean().default(false),
-  max_staleness_days: z.number().nullable().default(null),
+  max_staleness_days: z.number().nullable().default(7),
 });
 
 const ServeConfigSchema = z.object({

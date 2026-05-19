@@ -82,5 +82,5 @@ export interface TrustFilterConfig {
 export const DEFAULT_TRUST_FILTER: TrustFilterConfig = {
   allow_review_statuses: ['reviewed'],
   include_conflicted: false,
-  max_staleness_days: null,
+  max_staleness_days: 7,
 };

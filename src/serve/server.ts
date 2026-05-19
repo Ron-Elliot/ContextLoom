@@ -89,7 +89,7 @@ export async function startServer(trustFilter: TrustFilterConfig): Promise<void>
       );
       if (!artifactVersion) return textResult({ error: 'Artifact version not found' });
 
-      const claims = await fetchArtifactClaims(pool, artifact_id);
+      const claims = await fetchArtifactClaims(pool, artifactVersion.artifact_version_id);
       return textResult({ envelope: { artifact, artifact_version: artifactVersion }, claims });
     }
   );
@@ -100,12 +100,13 @@ export async function startServer(trustFilter: TrustFilterConfig): Promise<void>
     async (_uri, variables) => {
       const projectId = String(variables['project_id'] ?? '');
       const entity = await fetchProjectEntity(pool, projectId);
+      const filtered = entity && passesFilter(entity, trustFilter) ? entity : null;
       return {
         contents: [
           {
             uri: `context://projects/${projectId}`,
             mimeType: 'application/json',
-            text: JSON.stringify(entity),
+            text: JSON.stringify(filtered),
           },
         ],
       };
@@ -154,12 +155,13 @@ export async function startServer(trustFilter: TrustFilterConfig): Promise<void>
     async (_uri, variables) => {
       const entityId = String(variables['entity_id'] ?? '');
       const entity = await fetchEntity(pool, entityId);
+      const filtered = entity && passesFilter(entity, trustFilter) ? entity : null;
       return {
         contents: [
           {
             uri: `context://entities/${entityId}`,
             mimeType: 'application/json',
-            text: JSON.stringify(entity),
+            text: JSON.stringify(filtered),
           },
         ],
       };
