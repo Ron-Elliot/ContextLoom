@@ -14,11 +14,22 @@ const CrossProjectLinkSchema = z.object({
   relationship: z.string().optional(),
 });
 
+const TrustFilterConfigSchema = z.object({
+  allow_review_statuses: z.array(z.string()).default(['reviewed']),
+  include_conflicted: z.boolean().default(false),
+  max_staleness_days: z.number().nullable().default(7),
+});
+
+const ServeConfigSchema = z.object({
+  trust_filter: TrustFilterConfigSchema.optional(),
+});
+
 export const ConfigSchema = z.object({
   project_id: z.string().min(1, 'project_id is required'),
   name: z.string().min(1, 'name is required'),
   sources: z.array(SourceSchema),
   cross_project_links: z.array(CrossProjectLinkSchema).optional(),
+  serve: ServeConfigSchema.optional(),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
