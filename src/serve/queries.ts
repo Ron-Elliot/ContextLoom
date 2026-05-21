@@ -1,4 +1,5 @@
 import type { Pool } from 'pg';
+import OpenAI from 'openai';
 import type {
   Entity,
   EntityClaim,
@@ -6,7 +7,31 @@ import type {
   Artifact,
   ArtifactVersion,
   ArtifactClaim,
+  RelationshipEdge,
 } from './types';
+
+let _openai: OpenAI | null = null;
+
+function getOpenAI(): OpenAI {
+  if (!_openai) {
+    const apiKey = process.env['OPENAI_API_KEY'];
+    if (!apiKey) throw new Error('OPENAI_API_KEY is not set');
+    _openai = new OpenAI({ apiKey });
+  }
+  return _openai;
+}
+
+export async function embedQuery(queryText: string): Promise<number[]> {
+  const openai = getOpenAI();
+  const res = await openai.embeddings.create({
+    model: 'text-embedding-3-small',
+    input: queryText,
+    dimensions: 1536,
+  });
+  const embedding = res.data[0]?.embedding;
+  if (!embedding) throw new Error('Failed to get embedding from OpenAI');
+  return embedding;
+}
 
 export async function fetchEntity(pool: Pool, entityId: string): Promise<Entity | null> {
   const result = await pool.query<Entity>(
@@ -143,4 +168,186 @@ export async function fetchArtifactClaims(
     [artifactVersionId]
   );
   return result.rows;
+}
+
+type EntityWithScore = Entity & { score: number };
+
+export async function searchLexical(
+  pool: Pool,
+  query: string,
+  entityTypes: string[],
+  projectId: string | null,
+  limit: number
+): Promise<Array<{ entity: Entity; score: number }>> {
+  const params: unknown[] = [query];
+  const conditions: string[] = ["search_vector @@ plainto_tsquery('english', $1)"];
+
+  if (entityTypes.length > 0) {
+    params.push(entityTypes);
+    conditions.push(`entity_type = ANY($${params.length}::text[])`);
+  }
+
+  if (projectId) {
+    params.push(projectId);
+    conditions.push(`project_id = $${params.length}`);
+  }
+
+  params.push(limit);
+
+  const sql = `
+    SELECT entity_id, project_id, entity_type, name, description,
+           review_status, attention_state,
+           last_verified_at, last_evidence_change_at,
+           metadata, created_at, updated_at,
+           ts_rank(search_vector, plainto_tsquery('english', $1)) AS score
+    FROM entities
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY score DESC
+    LIMIT $${params.length}
+  `;
+
+  const result = await pool.query<EntityWithScore>(sql, params);
+  return result.rows.map(({ score, ...entity }) => ({ entity, score: Number(score) }));
+}
+
+export async function searchSemantic(
+  pool: Pool,
+  embedding: number[],
+  entityTypes: string[],
+  projectId: string | null,
+  limit: number
+): Promise<Array<{ entity: Entity; score: number }>> {
+  const vectorStr = `[${embedding.join(',')}]`;
+  const params: unknown[] = [vectorStr];
+  const conditions: string[] = ['embedding IS NOT NULL'];
+
+  if (entityTypes.length > 0) {
+    params.push(entityTypes);
+    conditions.push(`entity_type = ANY($${params.length}::text[])`);
+  }
+
+  if (projectId) {
+    params.push(projectId);
+    conditions.push(`project_id = $${params.length}`);
+  }
+
+  params.push(limit);
+
+  const sql = `
+    SELECT entity_id, project_id, entity_type, name, description,
+           review_status, attention_state,
+           last_verified_at, last_evidence_change_at,
+           metadata, created_at, updated_at,
+           1 - (embedding <=> $1::vector) AS score
+    FROM entities
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY embedding <=> $1::vector
+    LIMIT $${params.length}
+  `;
+
+  const result = await pool.query<EntityWithScore>(sql, params);
+  return result.rows.map(({ score, ...entity }) => ({ entity, score: Number(score) }));
+}
+
+async function fetchRelationshipEdges(
+  pool: Pool,
+  frontierIds: string[],
+  direction: 'outbound' | 'inbound' | 'both',
+  relationshipTypes: string[]
+): Promise<RelationshipEdge[]> {
+  if (frontierIds.length === 0) return [];
+
+  const params: unknown[] = [frontierIds];
+  const conditions: string[] = [];
+
+  if (direction === 'outbound') {
+    conditions.push('from_entity_id = ANY($1::uuid[])');
+  } else if (direction === 'inbound') {
+    conditions.push('to_entity_id = ANY($1::uuid[])');
+  } else {
+    conditions.push('(from_entity_id = ANY($1::uuid[]) OR to_entity_id = ANY($1::uuid[]))');
+  }
+
+  if (relationshipTypes.length > 0) {
+    params.push(relationshipTypes);
+    conditions.push(`relationship_type = ANY($${params.length}::text[])`);
+  }
+
+  const result = await pool.query<RelationshipEdge>(
+    `SELECT relationship_id, from_entity_id, to_entity_id, relationship_type,
+            review_status, attention_state,
+            last_verified_at, last_evidence_change_at,
+            metadata, created_at, updated_at
+     FROM relationships
+     WHERE ${conditions.join(' AND ')}`,
+    params
+  );
+  return result.rows;
+}
+
+export async function bfsRelatedEntities(
+  pool: Pool,
+  rootEntityId: string,
+  direction: 'outbound' | 'inbound' | 'both',
+  relationshipTypes: string[],
+  depth: number
+): Promise<{ edges: RelationshipEdge[]; entityIds: string[] }> {
+  const visited = new Set<string>([rootEntityId]);
+  const allEdges: RelationshipEdge[] = [];
+  const seenEdgeIds = new Set<string>();
+  const relatedEntityIds: string[] = [];
+  let frontier = [rootEntityId];
+
+  for (let d = 0; d < depth; d++) {
+    if (frontier.length === 0) break;
+    const edges = await fetchRelationshipEdges(pool, frontier, direction, relationshipTypes);
+    const nextFrontier: string[] = [];
+
+    for (const edge of edges) {
+      if (seenEdgeIds.has(edge.relationship_id)) continue;
+      seenEdgeIds.add(edge.relationship_id);
+      allEdges.push(edge);
+
+      const candidates: string[] = [];
+      if (direction === 'outbound' || direction === 'both') candidates.push(edge.to_entity_id);
+      if (direction === 'inbound' || direction === 'both') candidates.push(edge.from_entity_id);
+
+      for (const neighborId of candidates) {
+        if (!visited.has(neighborId)) {
+          visited.add(neighborId);
+          nextFrontier.push(neighborId);
+          relatedEntityIds.push(neighborId);
+        }
+      }
+    }
+
+    frontier = nextFrontier;
+  }
+
+  return { edges: allEdges, entityIds: relatedEntityIds };
+}
+
+export async function fetchEntitiesByIds(pool: Pool, entityIds: string[]): Promise<Entity[]> {
+  if (entityIds.length === 0) return [];
+  const result = await pool.query<Entity>(
+    `SELECT entity_id, project_id, entity_type, name, description,
+            review_status, attention_state,
+            last_verified_at, last_evidence_change_at,
+            metadata, created_at, updated_at
+     FROM entities WHERE entity_id = ANY($1::uuid[])`,
+    [entityIds]
+  );
+  return result.rows;
+}
+
+export async function fetchStalenessCount(pool: Pool, projectId: string): Promise<number> {
+  const result = await pool.query<{ stale_count: string }>(
+    `SELECT COUNT(*)::int AS stale_count
+     FROM entities
+     WHERE project_id = $1
+       AND last_evidence_change_at IS NOT NULL
+       AND (last_verified_at IS NULL OR last_evidence_change_at > last_verified_at)`,
+    [projectId]
+  );
+  return Number(result.rows[0]?.stale_count ?? 0);
 }
