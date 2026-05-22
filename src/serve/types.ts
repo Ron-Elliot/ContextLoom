@@ -84,3 +84,28 @@ export const DEFAULT_TRUST_FILTER: TrustFilterConfig = {
   include_conflicted: false,
   max_staleness_days: 7,
 };
+
+export interface RelationshipEdge {
+  relationship_id: string;
+  from_entity_id: string;
+  to_entity_id: string;
+  relationship_type: string;
+  review_status: string;
+  attention_state: string | null;
+  last_verified_at: Date | null;
+  last_evidence_change_at: Date | null;
+  metadata: Record<string, unknown>;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface StalenessSummary {
+  stale_count: number;
+}
+
+export interface SearchResult {
+  entity: Entity;
+  score: number;
+  matched_entity_claims: EntityClaim[];
+  citations: ArtifactRef[];
+}
