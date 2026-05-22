@@ -1,6 +1,8 @@
 import { Command } from 'commander';
 import { loadConfig } from './config';
 import { runIngest } from './ingest/pipeline';
+import { startServer } from './serve/server';
+import { DEFAULT_TRUST_FILTER } from './serve/types';
 
 const program = new Command();
 
@@ -27,9 +29,19 @@ program
 program
   .command('serve')
   .description('Start the MCP server for AI worker access')
-  .action(() => {
-    console.log('not implemented');
-    process.exit(0);
+  .requiredOption('--config <path>', 'Path to contextloom.yaml config file')
+  .action(async (options: { config: string }) => {
+    try {
+      const config = await loadConfig(options.config);
+      const trustFilter = {
+        ...DEFAULT_TRUST_FILTER,
+        ...(config.serve?.trust_filter ?? {}),
+      };
+      await startServer(trustFilter);
+    } catch (err) {
+      console.error((err as Error).message);
+      process.exit(1);
+    }
   });
 
 program.parse();
