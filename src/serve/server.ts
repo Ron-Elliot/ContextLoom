@@ -214,7 +214,17 @@ export async function startServer(trustFilter: TrustFilterConfig): Promise<void>
 
       const relatedEntities = applyFilter(await fetchEntitiesByIds(pool, entityIds), trustFilter);
 
-      return textResult({ root_entity: rootEntity, edges, related_entities: relatedEntities });
+      const allowedIds = new Set(relatedEntities.map((e) => e.entity_id));
+      allowedIds.add(entity_id);
+      const filteredEdges = edges.filter(
+        (e) => allowedIds.has(e.from_entity_id) && allowedIds.has(e.to_entity_id)
+      );
+
+      return textResult({
+        root_entity: rootEntity,
+        edges: filteredEdges,
+        related_entities: relatedEntities,
+      });
     }
   );
 
@@ -230,6 +240,8 @@ export async function startServer(trustFilter: TrustFilterConfig): Promise<void>
     async ({ project_id }) => {
       const projectEntity = await fetchProjectEntity(pool, project_id);
       if (!projectEntity) return textResult({ error: 'Project not found' });
+      if (!passesFilter(projectEntity, trustFilter))
+        return textResult({ error: 'Project excluded by trust filter' });
 
       const [components, decisions, constraints, staleCount] = await Promise.all([
         fetchEntitiesByType(pool, project_id, 'component'),
