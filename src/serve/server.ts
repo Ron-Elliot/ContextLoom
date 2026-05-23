@@ -1,5 +1,7 @@
+import http from 'http';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod/v4';
 import { Pool } from 'pg';
 import { v4 as uuidv4 } from 'uuid';
@@ -55,13 +57,7 @@ const trustFilterInputSchema = z
   .optional()
   .describe('Per-request trust filter; merges on top of server config (request fields override)');
 
-export async function startServer(trustFilter: TrustFilterConfig): Promise<void> {
-  const pool = new Pool({
-    connectionString:
-      process.env['DATABASE_URL'] ??
-      'postgresql://contextloom:contextloom@localhost:5432/contextloom',
-  });
-
+function buildMcpServer(pool: Pool, trustFilter: TrustFilterConfig): McpServer {
   const server = new McpServer(
     { name: 'contextloom', version: '0.1.0' },
     { instructions: 'ContextLoom MCP server for AI worker access to project knowledge.' }
@@ -391,6 +387,36 @@ export async function startServer(trustFilter: TrustFilterConfig): Promise<void>
     }
   );
 
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+  return server;
+}
+
+export async function startServer(trustFilter: TrustFilterConfig): Promise<void> {
+  const host = process.env['CONTEXTLOOM_HOST'];
+  const port = parseInt(process.env['CONTEXTLOOM_PORT'] ?? '8080', 10);
+
+  const pool = new Pool({
+    connectionString:
+      process.env['DATABASE_URL'] ??
+      'postgresql://contextloom:contextloom@localhost:5432/contextloom',
+  });
+
+  if (host) {
+    const httpServer = http.createServer(async (req, res) => {
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      const server = buildMcpServer(pool, trustFilter);
+      await server.connect(transport);
+      await transport.handleRequest(req, res);
+    });
+
+    await new Promise<void>((resolve) => {
+      httpServer.listen(port, host, () => {
+        console.log(`ContextLoom MCP server listening on http://${host}:${port}`);
+        resolve();
+      });
+    });
+  } else {
+    const server = buildMcpServer(pool, trustFilter);
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+  }
 }
