@@ -96,6 +96,8 @@ Return a JSON object with:
 - summary: string (1-2 sentence summary)`,
 };
 
+export type Extractor = (filePath: string, content: string) => Promise<ExtractionResult>;
+
 export async function extractFromFile(
   filePath: string,
   content: string

@@ -1,17 +1,20 @@
 import path from 'path';
 import { Config } from '../config';
-import pool from '../db';
 import { writeArtifact } from './artifactWriter';
 import { writeClaims } from './claimWriter';
 import { embedEntities } from './embedder';
 import { writeEntities } from './entityWriter';
 import { buildEnvelope } from './envelope';
-import { extractFromFile } from './extractor';
+import { extractFromFile, type Extractor } from './extractor';
 import { reconcileEntities } from './reconciler';
 import { propagateStaleness } from './staleness';
 import { walkFiles } from './walker';
 
-export async function runIngest(config: Config, configPath: string): Promise<void> {
+export async function runIngest(
+  config: Config,
+  configPath: string,
+  extractor: Extractor = extractFromFile
+): Promise<void> {
   const configDir = path.dirname(path.resolve(configPath));
 
   let totalFiles = 0;
@@ -33,7 +36,7 @@ export async function runIngest(config: Config, configPath: string): Promise<voi
         totalFiles++;
         if (changed) {
           changedFiles++;
-          const result = await extractFromFile(relPath, envelope.content);
+          const result = await extractor(relPath, envelope.content);
           await writeClaims(envelope.artifact_id, envelope.artifact_version_id, result);
           if (result.entities && result.entities.length > 0) {
             const entityIds = await writeEntities(
@@ -57,8 +60,6 @@ export async function runIngest(config: Config, configPath: string): Promise<voi
     await embedEntities(allEntityIds);
     await reconcileEntities(config.project_id, allEntityIds);
   }
-
-  await pool.end();
 
   if (failures.length > 0) {
     console.error(`\nIngest failed: ${failures.length} file(s) could not be processed:`);

@@ -3,10 +3,10 @@ import pool from '../db';
 
 let _client: OpenAI | null = null;
 
-function getClient(): OpenAI {
+function getClient(): OpenAI | null {
   if (!_client) {
     const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) throw new Error('OPENAI_API_KEY is not set');
+    if (!apiKey) return null;
     _client = new OpenAI({ apiKey });
   }
   return _client;
@@ -16,6 +16,7 @@ export async function embedEntities(entityIds: string[]): Promise<void> {
   if (entityIds.length === 0) return;
 
   const openai = getClient();
+  if (!openai) return;
   const client = await pool.connect();
   try {
     for (const entityId of entityIds) {

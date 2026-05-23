@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { loadConfig } from './config';
+import pool from './db';
 import { runIngest } from './ingest/pipeline';
 import { startServer } from './serve/server';
 import { DEFAULT_TRUST_FILTER } from './serve/types';
@@ -19,9 +20,11 @@ program
     try {
       const config = await loadConfig(options.config);
       await runIngest(config, options.config);
+      await pool.end();
       process.exit(0);
     } catch (err) {
       console.error((err as Error).message);
+      await pool.end().catch(() => undefined);
       process.exit(1);
     }
   });
