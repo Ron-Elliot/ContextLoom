@@ -2,6 +2,8 @@ import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mc
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import * as z from 'zod/v4';
 import { Pool } from 'pg';
+import { v4 as uuidv4 } from 'uuid';
+import { logger } from '../logger';
 import type { TrustFilterConfig } from './types';
 import { passesFilter, applyFilter } from './trust-filter';
 import {
@@ -83,6 +85,10 @@ export async function startServer(trustFilter: TrustFilterConfig): Promise<void>
       },
     },
     async ({ entity_id, include_claims, include_citations }) => {
+      const requestId = uuidv4();
+      const log = logger.child({ request_id: requestId, tool: 'get_entity' });
+      log.info({ entity_id }, 'tool invoked');
+
       const includeClaims = include_claims ?? true;
       const includeCitations = include_citations ?? false;
 
@@ -113,6 +119,10 @@ export async function startServer(trustFilter: TrustFilterConfig): Promise<void>
       },
     },
     async ({ artifact_id, artifact_version_id }) => {
+      const requestId = uuidv4();
+      const log = logger.child({ request_id: requestId, tool: 'get_artifact' });
+      log.info({ artifact_id }, 'tool invoked');
+
       const artifact = await fetchArtifact(pool, artifact_id);
       if (!artifact) return textResult({ error: 'Artifact not found' });
 
@@ -151,6 +161,10 @@ export async function startServer(trustFilter: TrustFilterConfig): Promise<void>
       },
     },
     async ({ query, entity_types, project_id, limit, trust_filter }) => {
+      const requestId = uuidv4();
+      const log = logger.child({ request_id: requestId, tool: 'search_context' });
+      log.info({ project_id, entity_types, limit }, 'tool invoked');
+
       const effectiveLimit = limit ?? 10;
       const entityTypes = entity_types ?? [];
       const projectId = project_id ?? null;
@@ -174,8 +188,8 @@ export async function startServer(trustFilter: TrustFilterConfig): Promise<void>
           projectId,
           effectiveLimit * 2
         );
-      } catch {
-        // Degrade gracefully when OpenAI embedding is unavailable
+      } catch (err) {
+        log.debug({ err }, 'semantic search unavailable, degrading to lexical only');
       }
 
       const scoreMap = new Map<
@@ -228,6 +242,10 @@ export async function startServer(trustFilter: TrustFilterConfig): Promise<void>
       },
     },
     async ({ entity_id, relationship_types, direction, depth, trust_filter }) => {
+      const requestId = uuidv4();
+      const log = logger.child({ request_id: requestId, tool: 'get_related_entities' });
+      log.info({ entity_id, direction, depth }, 'tool invoked');
+
       const dir = direction ?? 'both';
       const effectiveDepth = depth ?? 1;
       const relTypes = relationship_types ?? [];
@@ -273,6 +291,10 @@ export async function startServer(trustFilter: TrustFilterConfig): Promise<void>
       },
     },
     async ({ project_id }) => {
+      const requestId = uuidv4();
+      const log = logger.child({ request_id: requestId, tool: 'get_project_overview' });
+      log.info({ project_id }, 'tool invoked');
+
       const projectEntity = await fetchProjectEntity(pool, project_id);
       if (!projectEntity) return textResult({ error: 'Project not found' });
       if (!passesFilter(projectEntity, trustFilter))
