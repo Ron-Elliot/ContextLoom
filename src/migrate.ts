@@ -4,7 +4,8 @@ import { Pool } from 'pg';
 import { logger } from './logger';
 
 const DATABASE_URL =
-  process.env.DATABASE_URL || 'postgresql://contextloom:contextloom@localhost:5432/contextloom';
+  process.env['CONTEXTLOOM_DATABASE_URL'] ||
+  'postgresql://contextloom:contextloom@localhost:5432/contextloom';
 
 async function migrate(): Promise<void> {
   const pool = new Pool({ connectionString: DATABASE_URL });

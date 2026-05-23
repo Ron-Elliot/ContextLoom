@@ -66,15 +66,9 @@ export async function runIngest(config: Config, configPath: string): Promise<voi
   await pool.end();
 
   if (failures.length > 0) {
-    log.error(
-      { failure_count: failures.length, failures },
-      'ingest completed with errors'
-    );
+    log.error({ failure_count: failures.length, failures }, 'ingest completed with errors');
     throw new Error(`Ingest failed with ${failures.length} file error(s)`);
   }
 
-  log.info(
-    { total_files: totalFiles, changed_files: changedFiles },
-    'ingest complete'
-  );
+  log.info({ total_files: totalFiles, changed_files: changedFiles }, 'ingest complete');
 }
