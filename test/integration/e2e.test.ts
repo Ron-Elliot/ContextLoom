@@ -104,6 +104,10 @@ before(
 );
 
 after(async () => {
+  // Drain the db.ts singleton Pool that runIngest opened before stopping the
+  // container — otherwise lingering keep-alive activity raises an uncaughtException.
+  const dbMod = await import('../../src/db');
+  await dbMod.default.end();
   await testPool?.end();
   await container?.stop();
 });
