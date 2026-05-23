@@ -4,6 +4,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import * as z from 'zod/v4';
 import { Pool } from 'pg';
+import { v4 as uuidv4 } from 'uuid';
+import { logger } from '../logger';
 import type { TrustFilterConfig } from './types';
 import { passesFilter, applyFilter } from './trust-filter';
 import {
@@ -79,6 +81,10 @@ function buildMcpServer(pool: Pool, trustFilter: TrustFilterConfig): McpServer {
       },
     },
     async ({ entity_id, include_claims, include_citations }) => {
+      const requestId = uuidv4();
+      const log = logger.child({ request_id: requestId, tool: 'get_entity' });
+      log.info({ entity_id }, 'tool invoked');
+
       const includeClaims = include_claims ?? true;
       const includeCitations = include_citations ?? false;
 
@@ -109,6 +115,10 @@ function buildMcpServer(pool: Pool, trustFilter: TrustFilterConfig): McpServer {
       },
     },
     async ({ artifact_id, artifact_version_id }) => {
+      const requestId = uuidv4();
+      const log = logger.child({ request_id: requestId, tool: 'get_artifact' });
+      log.info({ artifact_id }, 'tool invoked');
+
       const artifact = await fetchArtifact(pool, artifact_id);
       if (!artifact) return textResult({ error: 'Artifact not found' });
 
@@ -147,6 +157,10 @@ function buildMcpServer(pool: Pool, trustFilter: TrustFilterConfig): McpServer {
       },
     },
     async ({ query, entity_types, project_id, limit, trust_filter }) => {
+      const requestId = uuidv4();
+      const log = logger.child({ request_id: requestId, tool: 'search_context' });
+      log.info({ project_id, entity_types, limit }, 'tool invoked');
+
       const effectiveLimit = limit ?? 10;
       const entityTypes = entity_types ?? [];
       const projectId = project_id ?? null;
@@ -170,8 +184,8 @@ function buildMcpServer(pool: Pool, trustFilter: TrustFilterConfig): McpServer {
           projectId,
           effectiveLimit * 2
         );
-      } catch {
-        // Degrade gracefully when OpenAI embedding is unavailable
+      } catch (err) {
+        log.debug({ err }, 'semantic search unavailable, degrading to lexical only');
       }
 
       const scoreMap = new Map<
@@ -224,6 +238,10 @@ function buildMcpServer(pool: Pool, trustFilter: TrustFilterConfig): McpServer {
       },
     },
     async ({ entity_id, relationship_types, direction, depth, trust_filter }) => {
+      const requestId = uuidv4();
+      const log = logger.child({ request_id: requestId, tool: 'get_related_entities' });
+      log.info({ entity_id, direction, depth }, 'tool invoked');
+
       const dir = direction ?? 'both';
       const effectiveDepth = depth ?? 1;
       const relTypes = relationship_types ?? [];
@@ -269,6 +287,10 @@ function buildMcpServer(pool: Pool, trustFilter: TrustFilterConfig): McpServer {
       },
     },
     async ({ project_id }) => {
+      const requestId = uuidv4();
+      const log = logger.child({ request_id: requestId, tool: 'get_project_overview' });
+      log.info({ project_id }, 'tool invoked');
+
       const projectEntity = await fetchProjectEntity(pool, project_id);
       if (!projectEntity) return textResult({ error: 'Project not found' });
       if (!passesFilter(projectEntity, trustFilter))
@@ -374,7 +396,7 @@ export async function startServer(trustFilter: TrustFilterConfig): Promise<void>
 
   const pool = new Pool({
     connectionString:
-      process.env['DATABASE_URL'] ??
+      process.env['CONTEXTLOOM_DATABASE_URL'] ??
       'postgresql://contextloom:contextloom@localhost:5432/contextloom',
   });
 
@@ -388,7 +410,7 @@ export async function startServer(trustFilter: TrustFilterConfig): Promise<void>
 
     await new Promise<void>((resolve) => {
       httpServer.listen(port, host, () => {
-        console.log(`ContextLoom MCP server listening on http://${host}:${port}`);
+        logger.info(`ContextLoom MCP server listening on http://${host}:${port}`);
         resolve();
       });
     });

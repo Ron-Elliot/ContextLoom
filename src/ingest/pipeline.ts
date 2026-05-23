@@ -1,5 +1,7 @@
 import path from 'path';
+import { v4 as uuidv4 } from 'uuid';
 import { Config } from '../config';
+import { logger } from '../logger';
 import { writeArtifact } from './artifactWriter';
 import { writeClaims } from './claimWriter';
 import { embedEntities } from './embedder';
@@ -15,6 +17,9 @@ export async function runIngest(
   configPath: string,
   extractor: Extractor = extractFromFile
 ): Promise<void> {
+  const runId = uuidv4();
+  const log = logger.child({ run_id: runId });
+
   const configDir = path.dirname(path.resolve(configPath));
 
   let totalFiles = 0;
@@ -27,7 +32,7 @@ export async function runIngest(
     const globs = source.globs ?? ['**/*'];
 
     const files = walkFiles(repoPath, globs);
-    console.log(`Found ${files.length} files in ${source.path}`);
+    log.info({ source_path: source.path, file_count: files.length }, 'source files discovered');
 
     for (const relPath of files) {
       try {
@@ -50,7 +55,7 @@ export async function runIngest(
         }
       } catch (err) {
         const message = (err as Error).message;
-        console.error(`Error processing ${relPath}: ${message}`);
+        log.error({ file: relPath, err: message }, 'file processing failed');
         failures.push({ file: relPath, error: message });
       }
     }
@@ -62,12 +67,9 @@ export async function runIngest(
   }
 
   if (failures.length > 0) {
-    console.error(`\nIngest failed: ${failures.length} file(s) could not be processed:`);
-    for (const { file, error } of failures) {
-      console.error(`  ${file}: ${error}`);
-    }
+    log.error({ failure_count: failures.length, failures }, 'ingest completed with errors');
     throw new Error(`Ingest failed with ${failures.length} file error(s)`);
   }
 
-  console.log(`Ingest complete: ${totalFiles} files processed, ${changedFiles} new or changed`);
+  log.info({ total_files: totalFiles, changed_files: changedFiles }, 'ingest complete');
 }

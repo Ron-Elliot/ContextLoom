@@ -33,3 +33,9 @@ yarn-error.log*
 # Coverage / test artifacts
 coverage/
 .nyc_output/
+
+# Secret-bearing files
+.envrc
+*.pem
+*.key
+secrets/

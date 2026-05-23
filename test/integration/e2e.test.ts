@@ -64,9 +64,9 @@ before(
 
     const connectionUri = container.getConnectionUri();
 
-    // Set DATABASE_URL before importing any pool-dependent modules so that
+    // Set CONTEXTLOOM_DATABASE_URL before importing any pool-dependent modules so that
     // db.ts initialises its Pool singleton with the test container URL.
-    process.env['DATABASE_URL'] = connectionUri;
+    process.env['CONTEXTLOOM_DATABASE_URL'] = connectionUri;
 
     testPool = new Pool({ connectionString: connectionUri });
     await applyMigrations(testPool, MIGRATIONS_DIR);
