@@ -25,6 +25,34 @@ function textResult(data: unknown): { content: Array<{ type: 'text'; text: strin
   return { content: [{ type: 'text', text: JSON.stringify(data) }] };
 }
 
+function mergeFilter(
+  serverFilter: TrustFilterConfig,
+  req?: {
+    allow_review_statuses?: string[];
+    include_conflicted?: boolean;
+    max_staleness_days?: number | null;
+  }
+): TrustFilterConfig {
+  if (!req) return serverFilter;
+  return {
+    allow_review_statuses: req.allow_review_statuses ?? serverFilter.allow_review_statuses,
+    include_conflicted: req.include_conflicted ?? serverFilter.include_conflicted,
+    max_staleness_days:
+      req.max_staleness_days !== undefined
+        ? req.max_staleness_days
+        : serverFilter.max_staleness_days,
+  };
+}
+
+const trustFilterInputSchema = z
+  .object({
+    allow_review_statuses: z.array(z.string()).optional(),
+    include_conflicted: z.boolean().optional(),
+    max_staleness_days: z.union([z.number(), z.null()]).optional(),
+  })
+  .optional()
+  .describe('Per-request trust filter; merges on top of server config (request fields override)');
+
 export async function startServer(trustFilter: TrustFilterConfig): Promise<void> {
   const pool = new Pool({
     connectionString:
@@ -119,12 +147,14 @@ export async function startServer(trustFilter: TrustFilterConfig): Promise<void>
           .max(50)
           .optional()
           .describe('Maximum results (1-50, default 10)'),
+        trust_filter: trustFilterInputSchema,
       },
     },
-    async ({ query, entity_types, project_id, limit }) => {
+    async ({ query, entity_types, project_id, limit, trust_filter }) => {
       const effectiveLimit = limit ?? 10;
       const entityTypes = entity_types ?? [];
       const projectId = project_id ?? null;
+      const effectiveFilter = mergeFilter(trustFilter, trust_filter);
 
       const lexicalResults = await searchLexical(
         pool,
@@ -161,7 +191,7 @@ export async function startServer(trustFilter: TrustFilterConfig): Promise<void>
 
       const merged = [...scoreMap.values()]
         .sort((a, b) => b.score - a.score)
-        .filter((r) => passesFilter(r.entity, trustFilter))
+        .filter((r) => passesFilter(r.entity, effectiveFilter))
         .slice(0, effectiveLimit);
 
       const results = await Promise.all(
@@ -194,12 +224,14 @@ export async function startServer(trustFilter: TrustFilterConfig): Promise<void>
           .optional()
           .describe('Edge direction relative to root entity (default: both)'),
         depth: z.number().int().min(1).max(3).optional().describe('BFS depth 1-3 (default: 1)'),
+        trust_filter: trustFilterInputSchema,
       },
     },
-    async ({ entity_id, relationship_types, direction, depth }) => {
+    async ({ entity_id, relationship_types, direction, depth, trust_filter }) => {
       const dir = direction ?? 'both';
       const effectiveDepth = depth ?? 1;
       const relTypes = relationship_types ?? [];
+      const effectiveFilter = mergeFilter(trustFilter, trust_filter);
 
       const rootEntity = await fetchEntity(pool, entity_id);
       if (!rootEntity) return textResult({ error: 'Entity not found' });
@@ -212,7 +244,10 @@ export async function startServer(trustFilter: TrustFilterConfig): Promise<void>
         effectiveDepth
       );
 
-      const relatedEntities = applyFilter(await fetchEntitiesByIds(pool, entityIds), trustFilter);
+      const relatedEntities = applyFilter(
+        await fetchEntitiesByIds(pool, entityIds),
+        effectiveFilter
+      );
 
       const allowedIds = new Set(relatedEntities.map((e) => e.entity_id));
       allowedIds.add(entity_id);

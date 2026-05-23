@@ -11,3 +11,6 @@ sources:
     extractors:
       - default
 cross_project_links: []
+serve:
+  trust_filter:
+    allow_review_statuses: [candidate, reviewed]
