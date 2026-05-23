@@ -1,6 +1,7 @@
 import { readdir, readFile } from 'fs/promises';
 import { join } from 'path';
 import { Pool } from 'pg';
+import { logger } from './logger';
 
 const DATABASE_URL =
   process.env.DATABASE_URL || 'postgresql://contextloom:contextloom@localhost:5432/contextloom';
@@ -27,12 +28,12 @@ async function migrate(): Promise<void> {
     let ran = 0;
     for (const file of files) {
       if (appliedVersions.has(file)) {
-        console.log(`  skip  ${file}`);
+        logger.info({ migration: file }, 'skip');
         continue;
       }
 
       const sql = await readFile(join(migrationsDir, file), 'utf8');
-      console.log(`  run   ${file}`);
+      logger.info({ migration: file }, 'run');
 
       await pool.query('BEGIN');
       try {
@@ -46,13 +47,13 @@ async function migrate(): Promise<void> {
       }
     }
 
-    console.log(`\nMigrations complete. ${ran} new migration(s) applied.`);
+    logger.info({ migrations_applied: ran }, 'migrations complete');
   } finally {
     await pool.end();
   }
 }
 
 migrate().catch((err: Error) => {
-  console.error('Migration failed:', err.message);
+  logger.error({ err: err.message }, 'migration failed');
   process.exit(1);
 });
