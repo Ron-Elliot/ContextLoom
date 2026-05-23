@@ -410,7 +410,7 @@ export async function startServer(trustFilter: TrustFilterConfig): Promise<void>
 
     await new Promise<void>((resolve) => {
       httpServer.listen(port, host, () => {
-        console.log(`ContextLoom MCP server listening on http://${host}:${port}`);
+        logger.info(`ContextLoom MCP server listening on http://${host}:${port}`);
         resolve();
       });
     });
