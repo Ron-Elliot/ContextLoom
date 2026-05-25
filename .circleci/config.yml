@@ -1,0 +1,49 @@
+version: 2.1
+
+jobs:
+  validate-service:
+    docker:
+      - image: cimg/node:22.4
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - npm-v1-{{ checksum "package-lock.json" }}
+            - npm-v1-
+      - run:
+          name: Install dependencies
+          command: npm ci
+      - save_cache:
+          key: npm-v1-{{ checksum "package-lock.json" }}
+          paths:
+            - node_modules
+      - run:
+          name: Type check
+          command: npm run typecheck
+      - run:
+          name: Lint
+          command: npm run lint
+      - run:
+          name: Test
+          command: npm test
+      - run:
+          name: Build
+          command: npm run build
+
+  validate-container:
+    docker:
+      - image: cimg/base:stable
+    steps:
+      - checkout
+      - setup_remote_docker
+      - run:
+          name: Build Docker image
+          command: docker build -t contextloom-service:ci .
+
+workflows:
+  ci:
+    jobs:
+      - validate-service
+      - validate-container:
+          requires:
+            - validate-service

@@ -1,17 +1,25 @@
 import path from 'path';
+import { v4 as uuidv4 } from 'uuid';
 import { Config } from '../config';
-import pool from '../db';
+import { logger } from '../logger';
 import { writeArtifact } from './artifactWriter';
 import { writeClaims } from './claimWriter';
 import { embedEntities } from './embedder';
 import { writeEntities } from './entityWriter';
 import { buildEnvelope } from './envelope';
-import { extractFromFile } from './extractor';
+import { extractFromFile, type Extractor } from './extractor';
 import { reconcileEntities } from './reconciler';
 import { propagateStaleness } from './staleness';
 import { walkFiles } from './walker';
 
-export async function runIngest(config: Config, configPath: string): Promise<void> {
+export async function runIngest(
+  config: Config,
+  configPath: string,
+  extractor: Extractor = extractFromFile
+): Promise<void> {
+  const runId = uuidv4();
+  const log = logger.child({ run_id: runId });
+
   const configDir = path.dirname(path.resolve(configPath));
 
   let totalFiles = 0;
@@ -24,7 +32,7 @@ export async function runIngest(config: Config, configPath: string): Promise<voi
     const globs = source.globs ?? ['**/*'];
 
     const files = walkFiles(repoPath, globs);
-    console.log(`Found ${files.length} files in ${source.path}`);
+    log.info({ source_path: source.path, file_count: files.length }, 'source files discovered');
 
     for (const relPath of files) {
       try {
@@ -33,7 +41,7 @@ export async function runIngest(config: Config, configPath: string): Promise<voi
         totalFiles++;
         if (changed) {
           changedFiles++;
-          const result = await extractFromFile(relPath, envelope.content);
+          const result = await extractor(relPath, envelope.content);
           await writeClaims(envelope.artifact_id, envelope.artifact_version_id, result);
           if (result.entities && result.entities.length > 0) {
             const entityIds = await writeEntities(
@@ -47,7 +55,7 @@ export async function runIngest(config: Config, configPath: string): Promise<voi
         }
       } catch (err) {
         const message = (err as Error).message;
-        console.error(`Error processing ${relPath}: ${message}`);
+        log.error({ file: relPath, err: message }, 'file processing failed');
         failures.push({ file: relPath, error: message });
       }
     }
@@ -58,15 +66,10 @@ export async function runIngest(config: Config, configPath: string): Promise<voi
     await reconcileEntities(config.project_id, allEntityIds);
   }
 
-  await pool.end();
-
   if (failures.length > 0) {
-    console.error(`\nIngest failed: ${failures.length} file(s) could not be processed:`);
-    for (const { file, error } of failures) {
-      console.error(`  ${file}: ${error}`);
-    }
+    log.error({ failure_count: failures.length, failures }, 'ingest completed with errors');
     throw new Error(`Ingest failed with ${failures.length} file error(s)`);
   }
 
-  console.log(`Ingest complete: ${totalFiles} files processed, ${changedFiles} new or changed`);
+  log.info({ total_files: totalFiles, changed_files: changedFiles }, 'ingest complete');
 }
